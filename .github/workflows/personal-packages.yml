@@ -1,0 +1,239 @@
+name: Personal packages
+
+on:
+  push:
+    branches:
+      - codex/dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows x64 with AI
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      SRC_DIR: ${{ github.workspace }}/src
+      BUILD_DIR: ${{ github.workspace }}/build
+      INSTALL_PREFIX: ${{ github.workspace }}/install
+      ECO: -DBINARY_PACKAGE_BUILD=ON -DUSE_AI=ON -DUSE_AI_DOWNLOAD=ON
+      CMAKE_BUILD_TYPE: Release
+      TARGET: skiptest
+      GENERATOR: Ninja
+    steps:
+      - name: Keep Unix line endings
+        shell: pwsh
+        run: git config --global core.autocrlf input
+      - name: Checkout the build commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install UCRT64 dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            intltool
+            po4a
+          pacboy: >-
+            cc:p
+            cmake:p
+            libxslt:p
+            ninja:p
+            python-jsonschema:p
+            curl:p
+            drmingw:p
+            gcc-libs:p
+            gettext:p
+            gmic:p
+            graphicsmagick:p
+            gtk3:p
+            icu:p
+            imagemagick:p
+            imath:p
+            iso-codes:p
+            json-glib:p
+            lcms2:p
+            lensfun:p
+            libarchive:p
+            libavif:p
+            libgphoto2:p
+            libheif:p
+            libjpeg-turbo:p
+            libjxl:p
+            libpng:p
+            librsvg:p
+            libsecret:p
+            libtiff:p
+            libwebp:p
+            libxml2:p
+            lua54:p
+            omp:p
+            opencv:p
+            openexr:p
+            openjpeg2:p
+            osm-gps-map:p
+            portmidi:p
+            potrace:p
+            pugixml:p
+            SDL2:p
+            sqlite3:p
+            webp-pixbuf-loader:p
+            zlib:p
+      - name: Initialize source dependencies
+        run: |
+          cd "${SRC_DIR}"
+          git submodule init
+          git config submodule.src/tests/integration.update none
+          git submodule update
+      - name: Build compatible exiv2
+        run: |
+          git clone --branch v0.27.7 --depth 1 https://github.com/Exiv2/exiv2 src-exiv2
+          cmake -S src-exiv2 -B build-exiv2 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DEXIV2_ENABLE_BMFF=ON \
+            -DEXIV2_ENABLE_NLS=ON \
+            -DEXIV2_ENABLE_VIDEO=OFF \
+            -DEXIV2_ENABLE_WIN_UNICODE=ON \
+            -DCMAKE_INSTALL_PREFIX="${MINGW_PREFIX}"
+          cmake --build build-exiv2
+          cmake --install build-exiv2
+      - name: Update Lensfun data
+        run: lensfun-update-data
+      - name: Build and install
+        run: |
+          cmake -E make_directory "${BUILD_DIR}" "${INSTALL_PREFIX}"
+          "$(cygpath "${SRC_DIR}")/.ci/ci-script.sh"
+      - name: Check installed runtime
+        run: |
+          test -f "${INSTALL_PREFIX}/bin/onnxruntime.dll"
+          "${INSTALL_PREFIX}/bin/darktable-cli.exe" --version
+      - name: Create installer icon
+        run: |
+          magick "${SRC_DIR}/data/pixmaps/256x256/darktable.png" \
+            -define icon:auto-resize="256,128,64,48,32,16" \
+            "${INSTALL_PREFIX}/dt_logo_multiresolution.ico"
+      - name: Create Inno Setup installer
+        shell: pwsh
+        run: |
+          choco upgrade innosetup --no-progress --yes
+          if($LASTEXITCODE -notin @(0, 3010)) { exit $LASTEXITCODE }
+          Set-Location -LiteralPath $env:INSTALL_PREFIX
+          Copy-Item -LiteralPath "$env:BUILD_DIR/darktable.iss" -Destination .
+          iscc darktable.iss
+          if($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $packageFiles = @(Get-ChildItem -LiteralPath Output -Filter '*.exe')
+          if($packageFiles.Count -ne 1) { throw 'expected one Windows installer' }
+          $packageDir = "$env:GITHUB_WORKSPACE/packages"
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          $buildCommit = $env:GITHUB_SHA.Substring(0, 10)
+          Move-Item -LiteralPath $packageFiles[0].FullName `
+            -Destination "$packageDir/darktable-personal-$buildCommit-windows-x64.exe"
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          path: packages/*.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: macOS arm64 with AI
+    runs-on: macos-15
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: cc
+      CXX: c++
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      SRC_DIR: ${{ github.workspace }}/src
+      BUILD_DIR: ${{ github.workspace }}/src/build
+      INSTALL_PREFIX: ${{ github.workspace }}/src/build/macosx
+      ECO: >-
+        -DBINARY_PACKAGE_BUILD=ON
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DBUILD_CURVE_TOOLS=ON
+        -DBUILD_NOISE_TOOLS=ON
+        -DUSE_GRAPHICSMAGICK=ON
+        -DUSE_IMAGEMAGICK=OFF
+        -DUSE_AI=ON
+        -DUSE_AI_DOWNLOAD=ON
+      CMAKE_BUILD_TYPE: Release
+      GENERATOR: Ninja
+      TARGET: skiptest
+    steps:
+      - name: Checkout the build commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize source dependencies
+        run: |
+          test "$(uname -m)" = arm64
+          cd "${SRC_DIR}"
+          git submodule init
+          git config submodule.src/tests/integration.update none
+          git submodule update
+      - name: Install Homebrew dependencies
+        run: |
+          brew untap --force aws/tap || true
+          brew update
+          export HOMEBREW_NO_INSTALL_UPGRADE=1
+          brew bundle --file="${SRC_DIR}/.ci/Brewfile" --verbose
+      - name: Rebuild GraphicsMagick for bundling
+        run: |
+          export HOMEBREW_NO_INSTALL_FROM_API=1
+          brew developer on
+          gm_formula=$(brew edit --quiet --print-path graphicsmagick)
+          sed 's/--with-modules/--disable-installed/1' "$gm_formula" > "$gm_formula.tmp"
+          mv "$gm_formula.tmp" "$gm_formula"
+          brew reinstall --build-from-source --force --quiet graphicsmagick
+      - name: Build and install
+        run: |
+          cmake -E make_directory "${BUILD_DIR}" "${INSTALL_PREFIX}"
+          "${SRC_DIR}/.ci/ci-script.sh"
+      - name: Create application bundle
+        run: |
+          "${SRC_DIR}/packaging/macosx/3_make_hb_darktable_package.sh"
+      - name: Check bundled runtime
+        run: |
+          app_dir="${INSTALL_PREFIX}/package/darktable.app"
+          find "$app_dir/Contents/Resources/lib" -name 'libonnxruntime*.dylib' -print -quit | grep -q .
+          "$app_dir/Contents/MacOS/darktable-cli" --version
+      - name: Create DMG
+        run: |
+          "${SRC_DIR}/packaging/macosx/4_make_hb_darktable_dmg.sh"
+      - name: Prepare download
+        run: |
+          shopt -s nullglob
+          package_files=("${INSTALL_PREFIX}"/*.dmg)
+          test "${#package_files[@]}" -eq 1
+          mkdir -p "${GITHUB_WORKSPACE}/packages"
+          build_commit=$(git -C "${SRC_DIR}" rev-parse --short=10 HEAD)
+          mv "${package_files[0]}" \
+            "${GITHUB_WORKSPACE}/packages/darktable-personal-${build_commit}-macos-arm64.dmg"
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v7
+        with:
+          path: packages/*.dmg
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
