@@ -1,0 +1,4 @@
+interface:
+  display_name: "相机照片归档到 darktable"
+  short_description: "后台批量归档相机照片到 NAS，按日期整理并快速跳过已导入照片"
+  default_prompt: "使用 $camera-to-darktable 将连接的相机照片归档到 NAS，跳过已导入文件，批量登记到 darktable 并显示进度。"

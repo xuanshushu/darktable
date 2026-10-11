@@ -1,0 +1,11 @@
+{
+  "camera_name": "ILCE-7CR",
+  "destination": "",
+  "run_root": "%TEMP%/darktable-import",
+  "gdbus": "C:/Program Files/darktable/bin/gdbus.exe",
+  "catalog_id": "%COMPUTERNAME%-darktable-default",
+  "cache_mib": 2048,
+  "batch_mib": 512,
+  "workers": 2,
+  "progress_port": 8767
+}
